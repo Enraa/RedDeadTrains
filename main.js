@@ -29,6 +29,7 @@ var goodstrainmsg = new Object(); // This is the list of users and their goods i
                                   // Only the top 30 players will be listed here. 
 var goodstrainembedmax = 30;
 var goodstrainmsgage = 0; // When this is 0, a new message will be sent and this will be set to 30. 
+var goodsthreshold = 100;
 
 var boycottedtraincombos = new Object(); // When a user is not prepared for a train, they can skip this one. 
                                          // There'll be a 10 min timer before they can be matched with THIS group. 
@@ -418,6 +419,14 @@ function trainmatch() {
             trainmembers.push(sortedtraincount[0])
             sortedtraincount.shift();
         }
+        // Determine if everyone in the top 7 we're trying to match has at least goodsthreshold goods. This can be set in an option. 
+        // We can determine this by getting the 7th place person in our sorted list. If that person is at least the threshold, we're good.
+        if (sortedtraincount.length > 6) {
+            if (sortedtraincount[6].goodscount < goodsthreshold) return
+        }
+        else {
+            return
+        }
         // Get 7 members that have not boycotted each other. 
         while(okay == false) {
             var proceed = true;
@@ -447,24 +456,105 @@ function trainmatch() {
                 okay = true;
             }
         }
-        // Do a last check to ensure we have 7 members
+        // Do a last check to ensure we have 7 members. If we don't, get out. 
         if (trainmembers.length < 7) { return }
-        // Sort only by honor, even if goods are insufficient
-        sortedtraincount = sortedtraincount.sort((a,b) => {
-            return b.honor - a.honor
+        // Form the message to send to users. This will CONFIRM if they are happy with this train and they can ignore it to boycott this combo.
+        // We'll form all of these into a promise array. If all promises resolve before our timeout, this action will complete sooner. Otherwise, they'll all resolve at 120 seconds.
+        var messagepromisechain = [];
+        var sendmessage = `Your train is ready! These are the users (in order) that will be on this train.`
+        var fetchedusers = []
+        trainmembers.forEach((member) => {
+            client.users.fetch(member.userid).then((fetched) => {
+                fetchedusers.push(fetched);
+                sendmessage = `${sendmessage}\n${fetched.displayName} (${fetched.tag}) - Honor: ${member.honor}`
+            })
         })
-        // Form the message to send to users
-
-
-
-
-
-
-
-
-
-        
+        sendmessage = `${sendmessage}\n\nPlease confirm you are ready for this train within 120 seconds by reacting to this message. Boycott this combination by not reacting - you will be placed back in queue and ignore this specific match.`
+        fetchedusers.forEach((user) => {
+            try { 
+                // Push the new promise where we send the message to the users. This will start the 120 second timer as soon as Discord acknowledges the message is sent. 
+                messagepromisechain.push(new Promise((resolve,reject) => {
+                    user.send(sendmessage).then((msg) => {
+                        // Only collecting reactions from the user. It doesn't matter what they react with. 
+                        const filter = (reaction,ruser) => ruser.id === user.id;
+                        msg.react('👍')
+                        var reactioncollector = msg.createReactionCollector(filter, { time: 120000 })
+                        // When they react, resolve the promise, we're done here.
+                        reactioncollector.on('collect', (r) => {
+                            resolve("Accepted");
+                            reactioncollector.stop('Accepted');
+                        })
+                        // Make sure we ended due to collecting a reaction. If not, resolve anyway with "Timeout" which we can check for later. 
+                        reactioncollector.on('end', (c,reason) => {
+                            if (reason !== 'Accepted') {
+                                resolve(`Timeout ${user.id}`)
+                            }
+                        })
+                    }) 
+                }))
+            } catch(err) { console.log(err) }
+        })
+        // Check to see if everyone accepted this train. If they did, then we form it. If they didn't, we add the rejector to the boycott list and toss these people back into the waiting list. 
+        Promise.all(messagepromisechain).then((results) => {
+            var check = results.find(element => element.includes('Timeout'))
+            if (check != null) { // Someone said no - let's check each result and set up a boycott for each person that did. 
+                
+            }
+        })
+        // Create Channels for this Train. 
+        const [traintextchannel, trainvoicechannel] = createDynamicChannelsTrain()
     }
+}
+// Create Channels dynamically
+function createDynamicChannelsTrain(guild,category = '',members) {
+    var textchannel = 0
+    var voicechannel = 0
+    var promisearray = [];
+    var channelnamenum = trains.length()+1;
+    // Get usernames as an array for each of the people we're creating the channel for, if supplied. Assign username text as well. 
+    var users = null;
+    var usernames = null;
+    var usernametext = '';
+    var permissionoverwritesobj = [{ id: guild.roles.everyone.id, deny: ['VIEW_CHANNEL'] }]
+    try {
+        users = (client.users.filter((id) => members.includes(id)))
+        usernames = users.map((user) => `${user.tag} (${user.id})`)
+        usernames.forEach((name) => {
+            usernametext = `${usernametext}\n${name}`
+        })
+        // Create permission overwrites objects so that these users alone can actually see and chat in this. 
+        users.forEach((user) => {
+            permissionoverwritesobj.push({
+                id: user.id,
+                allow: ['VIEW_CHANNEL', 'SEND_MESSAGES']
+            })
+        })
+    }
+    catch (err) { console.log(err) }
+    try {
+        promisearray.push(guild.channels.create(`train-${channelnamenum}-text`, { 
+            reason: `Dynamic channel creation for a train with the following users: ${usernametext}`,
+            type: 'text',
+            topic: `Text channel for a goods train`,
+            permissionOverwrites: permissionoverwritesobj,
+            parent: category
+        }))
+    }
+    catch (err) { promisearray.push(new Promise((res,rej) => { res("Error")}))}
+    try {
+        promisearray.push(guild.channels.create(`train-${channelnamenum}-voice`, { 
+            reason: `Dynamic channel creation for a train with the following users: ${usernametext}`,
+            type: 'voice',
+            topic: `Voice channel for a goods train`,
+            permissionOverwrites: permissionoverwritesobj,
+            parent: category
+        }))
+    }
+    catch (err) { promisearray.push(new Promise((res,rej) => { res("Error")}))}
+    // This should be both of our channels created in Text, Voice order. Check for "Error" and then proceed.
+    Promise.all(promisearray).then((promises) => {
+        return promises
+    })
 }
 
 // Logging Functions
