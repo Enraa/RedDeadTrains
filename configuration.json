@@ -1,0 +1,13 @@
+{
+    "__token": "Discord Token Secret should be pasted here.",
+    "token": "",
+    "__firebaseCredentials": "Each of the respective Google Firebase credentials should be placed here in their appropriate place. Find this by checking an app overview in the Firebase console.",
+    "apiKey": "",
+    "authDomain": "",
+    "databaseURL": "",
+    "projectId": "",
+    "storageBucket": "",
+    "messagingSenderId": "",
+    "appId": "",
+    "measurementId": ""
+}
